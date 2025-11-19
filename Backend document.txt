@@ -1,0 +1,117 @@
+Django Docx Processor Guide
+This guide will help you create a Django app that uploads a .docx file, processes it using the python-docx library, and displays the text to the user.
+Prerequisites
+ * Install Django and python-docx:
+   Run this in your terminal:
+   pip install django python-docx
+
+ * Create a Project (if you haven't already):
+   django-admin startproject myproject
+cd myproject
+python manage.py startapp docx_reader
+
+ * Register the App:
+   Add 'docx_reader' to INSTALLED_APPS in myproject/settings.py.
+The Code
+1. Forms (docx_reader/forms.py)
+We need a simple form to handle the file upload.
+from django import forms
+
+class DocxUploadForm(forms.Form):
+    file = forms.FileField(
+        label='Select a .docx file',
+        help_text='Only .docx files are supported'
+    )
+
+    def clean_file(self):
+        file = self.cleaned_data['file']
+        if not file.name.endswith('.docx'):
+            raise forms.ValidationError("Please upload a valid .docx file.")
+        return file
+
+2. Views (docx_reader/views.py)
+This is the core logic. We read the file directly from memory (RAM) without saving it to the disk first, which is cleaner for temporary processing.
+import docx
+from django.shortcuts import render
+from .forms import DocxUploadForm
+
+def process_docx(request):
+    extracted_text = ""
+    
+    if request.method == 'POST':
+        form = DocxUploadForm(request.POST, request.FILES)
+        if form.is_valid():
+            docx_file = request.FILES['file']
+            
+            try:
+                # Open the document directly from the uploaded file object
+                doc = docx.Document(docx_file)
+                
+                # Extract text from paragraphs
+                full_text = []
+                for para in doc.paragraphs:
+                    full_text.append(para.text)
+                
+                # Join paragraphs with newlines
+                extracted_text = '\n'.join(full_text)
+                
+            except Exception as e:
+                form.add_error('file', f"Error processing file: {str(e)}")
+    else:
+        form = DocxUploadForm()
+
+    return render(request, 'docx_reader/upload.html', {
+        'form': form,
+        'extracted_text': extracted_text
+    })
+
+3. URLs (docx_reader/urls.py)
+Map the view to a URL.
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path('', views.process_docx, name='process_docx'),
+]
+
+(Don't forget to include this urls.py in your main project's urls.py)
+4. Template (docx_reader/templates/docx_reader/upload.html)
+The frontend to display the form and the results.
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Django Docx Reader</title>
+    <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+        .container { border: 1px solid #ddd; padding: 2rem; border-radius: 8px; }
+        .result-box { background: #f9f9f9; padding: 1rem; border: 1px solid #eee; margin-top: 2rem; white-space: pre-wrap; }
+        button { background: #007bff; color: white; border: none; padding: 10px 20px; cursor: pointer; }
+        button:hover { background: #0056b3; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Upload Docx File</h1>
+        
+        <form method="post" enctype="multipart/form-data">
+            {% csrf_token %}
+            {{ form.as_p }}
+            <button type="submit">Extract Text</button>
+        </form>
+
+        {% if extracted_text %}
+        <div class="result-box">
+            <h3>Extracted Content:</h3>
+            <p>{{ extracted_text }}</p>
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>
+
+Summary
+ * Users upload a file via the Form.
+ * The View receives request.FILES['file'].
+ * docx.Document() opens the file stream.
+ * We loop through doc.paragraphs to get the text.
+ * The text is sent back to the Template for display.
