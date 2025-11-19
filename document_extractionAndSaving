@@ -1,0 +1,220 @@
+Django Docx Processor Guide
+This guide will help you create a Django app that uploads a .docx file, processes it, and allows the user to either preview it or download it as a structured map (JSON/Markdown).
+Prerequisites
+ * Install Django and python-docx:
+   pip install django python-docx
+
+ * Create a Project & App:
+   django-admin startproject myproject
+cd myproject
+python manage.py startapp docx_reader
+
+ * Register the App:
+   Add 'docx_reader' to INSTALLED_APPS in myproject/settings.py.
+The Code
+1. Forms (docx_reader/forms.py)
+We added a export_format field so the user can choose how they want the data.
+from django import forms
+
+class DocxUploadForm(forms.Form):
+    file = forms.FileField(
+        label='Select a .docx file',
+        help_text='Only .docx files are supported'
+    )
+    export_format = forms.ChoiceField(
+        choices=[
+            ('html', 'Preview in Browser'),
+            ('json', 'Download as JSON'),
+            ('markdown', 'Download as Markdown'),
+        ],
+        label='Output Format'
+    )
+
+    def clean_file(self):
+        file = self.cleaned_data['file']
+        if not file.name.endswith('.docx'):
+            raise forms.ValidationError("Please upload a valid .docx file.")
+        return file
+
+2. Views (docx_reader/views.py)
+This view now handles the logic for generating downloadable files (HttpResponse with Content-Disposition) based on the user's choice.
+import docx
+import json
+from docx.text.paragraph import Paragraph
+from docx.table import Table
+from django.shortcuts import render
+from django.http import HttpResponse
+from .forms import DocxUploadForm
+
+def process_docx(request):
+    content_blocks = []
+    
+    if request.method == 'POST':
+        form = DocxUploadForm(request.POST, request.FILES)
+        if form.is_valid():
+            docx_file = request.FILES['file']
+            export_format = form.cleaned_data['export_format']
+            
+            try:
+                doc = docx.Document(docx_file)
+                
+                # --- Extraction Logic ---
+                for element in doc.element.body:
+                    
+                    # 1. Handle Paragraphs (Text & Headings)
+                    if element.tag.endswith('p'):
+                        para = Paragraph(element, doc)
+                        text = para.text.strip()
+                        
+                        if text:
+                            style_name = para.style.name if para.style else ""
+                            if style_name.startswith('Heading'):
+                                try:
+                                    level = int(style_name.split()[-1])
+                                except ValueError:
+                                    level = 2
+                                content_blocks.append({'type': 'heading', 'content': text, 'level': level})
+                            else:
+                                content_blocks.append({'type': 'text', 'content': text})
+                            
+                    # 2. Handle Tables
+                    elif element.tag.endswith('tbl'):
+                        table = Table(element, doc)
+                        table_data = []
+                        for row in table.rows:
+                            row_data = [cell.text.strip() for cell in row.cells]
+                            table_data.append(row_data)
+                        content_blocks.append({'type': 'table', 'content': table_data})
+
+                # --- Export Logic ---
+                
+                # Option A: Download JSON
+                if export_format == 'json':
+                    json_data = json.dumps(content_blocks, indent=4)
+                    response = HttpResponse(json_data, content_type='application/json')
+                    response['Content-Disposition'] = 'attachment; filename="converted_doc.json"'
+                    return response
+
+                # Option B: Download Markdown
+                elif export_format == 'markdown':
+                    md_lines = []
+                    for block in content_blocks:
+                        if block['type'] == 'heading':
+                            # Convert level 1 -> "# ", level 2 -> "## "
+                            prefix = '#' * min(block['level'], 6)
+                            md_lines.append(f"{prefix} {block['content']}\n")
+                        
+                        elif block['type'] == 'text':
+                            md_lines.append(f"{block['content']}\n")
+                        
+                        elif block['type'] == 'table':
+                            # Simple Markdown table generator
+                            rows = block['content']
+                            if rows:
+                                # Header
+                                headers = rows[0]
+                                md_lines.append("| " + " | ".join(headers) + " |")
+                                md_lines.append("| " + " | ".join(['---'] * len(headers)) + " |")
+                                # Body
+                                for row in rows[1:]:
+                                    md_lines.append("| " + " | ".join(row) + " |")
+                            md_lines.append("\n")
+
+                    response = HttpResponse("\n".join(md_lines), content_type='text/markdown')
+                    response['Content-Disposition'] = 'attachment; filename="converted_doc.md"'
+                    return response
+
+            except Exception as e:
+                form.add_error('file', f"Error processing file: {str(e)}")
+    else:
+        form = DocxUploadForm()
+
+    # Option C: Preview HTML (Default)
+    return render(request, 'docx_reader/upload.html', {
+        'form': form,
+        'content_blocks': content_blocks
+    })
+
+3. App URLs (docx_reader/urls.py)
+from django.urls import path
+from . import views
+
+urlpatterns = [
+    path('', views.process_docx, name='process_docx'),
+]
+
+4. Main Project URLs (myproject/urls.py)
+from django.contrib import admin
+from django.urls import path, include
+
+urlpatterns = [
+    path('admin/', admin.site.urls),
+    path('', include('docx_reader.urls')),
+]
+
+5. Template (docx_reader/templates/docx_reader/upload.html)
+Added the dropdown menu logic to the form display.
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Django Docx Converter</title>
+    <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+        .container { border: 1px solid #ddd; padding: 2rem; border-radius: 8px; }
+        .result-box { background: #f9f9f9; padding: 1rem; border: 1px solid #eee; margin-top: 2rem; }
+        
+        h1, h2, h3 { color: #2c3e50; }
+        table { width: 100%; border-collapse: collapse; margin: 1rem 0; background: white; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+        
+        button { background: #28a745; color: white; border: none; padding: 10px 20px; cursor: pointer; font-size: 16px; border-radius: 4px; }
+        button:hover { background: #218838; }
+        
+        select, input[type="file"] { padding: 10px; margin-bottom: 10px; display: block; width: 100%; box-sizing: border-box;}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Docx to Structured Data</h1>
+        
+        <form method="post" enctype="multipart/form-data">
+            {% csrf_token %}
+            
+            <div style="margin-bottom: 15px;">
+                <strong>{{ form.file.label }}</strong>
+                {{ form.file }}
+                <div style="color: red;">{{ form.file.errors }}</div>
+            </div>
+
+            <div style="margin-bottom: 15px;">
+                <strong>{{ form.export_format.label }}</strong>
+                {{ form.export_format }}
+            </div>
+
+            <button type="submit">Process & Export</button>
+        </form>
+
+        {% if content_blocks %}
+        <div class="result-box">
+            <h3>Web Preview:</h3>
+            {% for block in content_blocks %}
+                {% if block.type == 'heading' %}
+                    <h{{ block.level }}>{{ block.content }}</h{{ block.level }}>
+                {% elif block.type == 'text' %}
+                    <p>{{ block.content }}</p>
+                {% elif block.type == 'table' %}
+                    <table>
+                        <tbody>
+                        {% for row in block.content %}
+                            <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                {% endif %}
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+</body>
+</html>
+
