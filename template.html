@@ -8,16 +8,15 @@
         .response-box { background: #f0f7ff; padding: 1.5rem; border: 1px solid #cce5ff; margin-top: 2rem; border-radius: 4px;}
         .error-box { background: #fff0f0; padding: 1rem; border: 1px solid #ffcccc; color: #d32f2f; margin-top: 1rem; }
         
-        textarea { width: 100%; box-sizing: border-box; padding: 10px; margin-top: 5px;}
         button.primary { background: #6200ea; color: white; border: none; padding: 10px 20px; cursor: pointer; border-radius: 4px; font-size: 16px;}
         button.secondary { background: #fff; border: 1px solid #ccc; padding: 8px 16px; cursor: pointer; border-radius: 4px; margin-right: 5px;}
         button:hover { opacity: 0.9; }
         
         .actions { margin-top: 15px; padding-top: 15px; border-top: 1px solid #dae0e5; }
 
-        /* --- NEW: Loading Overlay Styles --- */
+        /* Loading Overlay Styles */
         #loading-overlay {
-            display: none; /* Hidden by default */
+            display: none;
             position: fixed;
             top: 0; left: 0; width: 100%; height: 100%;
             background: rgba(255, 255, 255, 0.85);
@@ -32,7 +31,7 @@
             width: 50px;
             height: 50px;
             border: 5px solid #f3f3f3;
-            border-top: 5px solid #6200ea; /* Matches your primary button */
+            border-top: 5px solid #6200ea;
             border-radius: 50%;
             animation: spin 1s linear infinite;
             margin-bottom: 20px;
@@ -43,17 +42,8 @@
             100% { transform: rotate(360deg); }
         }
 
-        .loading-text {
-            color: #333;
-            font-size: 1.2rem;
-            font-weight: bold;
-        }
-        
-        .loading-subtext {
-            color: #666;
-            margin-top: 5px;
-            font-size: 0.9rem;
-        }
+        .loading-text { color: #333; font-size: 1.2rem; font-weight: bold; }
+        .loading-subtext { color: #666; margin-top: 5px; font-size: 0.9rem; }
     </style>
 </head>
 <body>
@@ -69,20 +59,15 @@
             <a href="{% url 'process_docx' %}">&larr; Back to Docx Converter</a>
         </div>
 
-        <h1>Analyze with Amazon Bedrock (Sonnet)</h1>
+        <h1>Analyze with Amazon Bedrock</h1>
         
         <form method="post" enctype="multipart/form-data" id="analysis-form">
             {% csrf_token %}
             
-            <div style="margin-bottom: 15px;">
+            <div style="margin-bottom: 25px;">
                 <strong>{{ form.document.label }}</strong>
                 {{ form.document }}
                 <div style="color: red;">{{ form.document.errors }}</div>
-            </div>
-
-            <div style="margin-bottom: 15px;">
-                <strong>{{ form.user_prompt.label }}</strong>
-                {{ form.user_prompt }}
             </div>
 
             <button type="submit" class="primary">Analyze Document</button>
@@ -97,7 +82,6 @@
         {% if llm_response %}
         <div class="response-box">
             <h3 style="margin-top: 0;">AI Response:</h3>
-            
             <div id="ai-content" style="white-space: pre-wrap;">{{ llm_response }}</div>
             
             <div class="actions">
@@ -110,23 +94,18 @@
     </div>
 
     <script>
-        // --- NEW: Handle Form Submit to Show Loader ---
         const form = document.getElementById('analysis-form');
         const loader = document.getElementById('loading-overlay');
 
         form.addEventListener('submit', function(e) {
-            // Check if form is valid before showing loader (basic check)
             const fileInput = document.querySelector('input[type="file"]');
-            const promptInput = document.querySelector('textarea');
             
-            if (fileInput.value && promptInput.value) {
-                // Show the overlay
+            // Only check if file is present now
+            if (fileInput.value) {
                 loader.style.display = 'flex';
             }
-            // If inputs are empty, let Django handle validation errors (loader won't show)
         });
 
-        // --- Existing Download Logic ---
         function downloadResponse(type) {
             const content = document.getElementById('ai-content').innerText;
             let filename = 'ai_analysis.txt';
