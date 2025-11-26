@@ -1,65 +1,116 @@
-# ... imports remain the same
+import json
+import docx
+import boto3
+from django.shortcuts import render
+from django.http import StreamingHttpResponse  # <--- Key Import
+from .forms import LLMSubmissionForm
 from langchain_aws import ChatBedrock
 from langchain_core.messages import HumanMessage, SystemMessage
 
-# Phase 1 View (process_docx) remains unchanged...
+# --- Helper: Extract Text from File Object ---
+def extract_text(uploaded_file):
+    """Detects file type and extracts string content."""
+    filename = uploaded_file.name.lower()
+    
+    if filename.endswith('.docx'):
+        doc = docx.Document(uploaded_file)
+        full_text = []
+        for para in doc.paragraphs:
+            full_text.append(para.text)
+        # Also extract tables if critical, but keeping it simple for now
+        return '\n'.join(full_text)
+    else:
+        # Assume text/md/json
+        return uploaded_file.read().decode('utf-8')
 
-# --- Phase 2 View: LLM Analysis ---
+# --- The Generator Function (The Brain) ---
+def stream_strategy_generator(sample_drs, sample_strat, target_drs):
+    """
+    Yields HTML chunks to the browser as the LLM generates them.
+    """
+    
+    # 1. Setup Bedrock
+    chat = ChatBedrock(
+        model_id="anthropic.claude-3-sonnet-20240229-v1:0",
+        model_kwargs={"temperature": 0.1, "max_tokens": 4096}
+    )
+
+    # 2. Step A: Generate the Outline
+    yield '<div class="status-update">Phase 1: Analyzing samples and creating Outline...</div>'
+    
+    outline_prompt = (
+        f"Analyze this Sample Strategy:\n{sample_strat}\n\n"
+        "Extract the high-level Section Headers used in this document. "
+        "Return ONLY a JSON list of strings. Example: [\"1. Scope\", \"2. Risk Analysis\", \"3. Test Approach\"]"
+    )
+    
+    try:
+        response = chat.invoke([HumanMessage(content=outline_prompt)])
+        # Parse JSON from LLM response (cleaning potential markdown code blocks)
+        clean_json = response.content.replace("```json", "").replace("```", "").strip()
+        sections = json.loads(clean_json)
+        
+        yield f'<div class="status-success">Outline Created: {len(sections)} sections identified.</div>'
+        yield '<ul class="outline-list">'
+        for sec in sections:
+            yield f'<li>{sec}</li>'
+        yield '</ul><hr>'
+
+    except Exception as e:
+        yield f'<div class="error-box">Error creating outline: {str(e)}</div>'
+        return
+
+    # 3. Step B: Loop through Sections
+    full_document = []
+    
+    for section in sections:
+        yield f'<div class="status-update">Generating Section: <strong>{section}</strong>...</div>'
+        
+        section_prompt = (
+            f"You are writing a Test Strategy. \n"
+            f"STYLE REFERENCE: {sample_strat}\n"
+            f"INPUT REQUIREMENT: {target_drs}\n\n"
+            f"TASK: Write ONLY the content for the section: '{section}'. "
+            "Do not include the section header itself in the output, just the body text. "
+            "Maintain the exact tone and formatting of the Style Reference."
+        )
+        
+        chunk_resp = chat.invoke([HumanMessage(content=section_prompt)])
+        content = chunk_resp.content
+        
+        # Store for final download
+        full_document.append(f"## {section}\n{content}")
+        
+        # Stream to UI
+        yield f'<div class="section-block"><h3>{section}</h3><div class="content">{content}</div></div>'
+
+    # 4. Final Hidden Block for Download
+    final_md = "\n\n".join(full_document)
+    # We hide this raw data in a div so JavaScript can grab it for the download button
+    yield f'<div id="final-raw-content" style="display:none;">{final_md}</div>'
+    yield '<script>document.getElementById("download-btn").style.display = "inline-block";</script>'
+    yield '<div class="status-success">Generation Complete!</div>'
+
+
+# --- The View ---
 def llm_analysis(request):
-    llm_response = ""
-    error_message = ""
-
     if request.method == 'POST':
         form = LLMSubmissionForm(request.POST, request.FILES)
         if form.is_valid():
-            try:
-                # 1. Read all three files
-                # Note: We assume these are text/markdown files. 
-                # If they are raw .docx, you would need to run the extraction logic on them first.
-                sample_drs_content = request.FILES['sample_drs'].read().decode('utf-8')
-                sample_strat_content = request.FILES['sample_strategy'].read().decode('utf-8')
-                target_drs_content = request.FILES['target_drs'].read().decode('utf-8')
+            # Extract content immediately
+            s_drs = extract_text(request.FILES['sample_drs'])
+            s_strat = extract_text(request.FILES['sample_strategy'])
+            t_drs = extract_text(request.FILES['target_drs'])
 
-                # 2. Define the Persona
-                system_prompt = (
-                    "You are an expert QA Test Architect. Your goal is to draft a Test Strategy Document. "
-                    "Analyze the provided examples to understand the section headers, mapping logic, and tone. "
-                    "Generate the output for the new DRS following the EXACT structure of the examples provided."
-                )
-
-                # 3. Construct the Few-Shot Prompt
-                # We combine the inputs to simulate the learning process
-                combined_prompt = (
-                    f"USER:\nHere is Example #1 DRS:\n{sample_drs_content}\n\n"
-                    f"ASSISTANT:\nHere is Example #1 Strategy:\n{sample_strat_content}\n\n"
-                    f"USER:\nHere is the New DRS. Generate the Test Strategy document based on the style above:\n{target_drs_content}"
-                )
-
-                # 4. Initialize Bedrock
-                chat = ChatBedrock(
-                    model_id="anthropic.claude-3-sonnet-20240229-v1:0",
-                    model_kwargs={"temperature": 0.2, "max_tokens": 4096} 
-                    # lowered temperature to 0.2 to ensure it sticks strictly to the example format
-                )
-
-                # 5. Invoke LLM
-                messages = [
-                    SystemMessage(content=system_prompt),
-                    HumanMessage(content=combined_prompt)
-                ]
-
-                response = chat.invoke(messages)
-                llm_response = response.content
-
-            except UnicodeDecodeError:
-                error_message = "Could not read one of the files. Please ensure all uploads are Text or Markdown files."
-            except Exception as e:
-                error_message = f"Error communicating with Bedrock: {str(e)}"
+            # Return the Stream
+            response = StreamingHttpResponse(
+                stream_strategy_generator(s_drs, s_strat, t_drs)
+            )
+            # This header keeps the content type compatible with standard browser rendering
+            # note: proper streaming often uses SSE (Server Sent Events), but for simple
+            # Django apps, streaming HTML directly is a common workaround.
+            return response
     else:
         form = LLMSubmissionForm()
 
-    return render(request, 'docx_reader/llm_analysis.html', {
-        'form': form,
-        'llm_response': llm_response,
-        'error_message': error_message
-    })
+    return render(request, 'docx_reader/llm_analysis.html', {'form': form})
