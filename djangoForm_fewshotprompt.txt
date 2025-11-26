@@ -1,0 +1,37 @@
+from django import forms
+
+# Phase 1 Form (Unchanged)
+class DocxUploadForm(forms.Form):
+    file = forms.FileField(
+        label='Select a .docx file',
+        help_text='Only .docx files are supported'
+    )
+    export_format = forms.ChoiceField(
+        choices=[
+            ('html', 'Preview in Browser'),
+            ('json', 'Download as JSON'),
+            ('markdown', 'Download as Markdown'),
+        ],
+        label='Output Format'
+    )
+
+    def clean_file(self):
+        file = self.cleaned_data['file']
+        if not file.name.endswith('.docx'):
+            raise forms.ValidationError("Please upload a valid .docx file.")
+        return file
+
+# Phase 2 Form (Updated for 3 Files)
+class LLMSubmissionForm(forms.Form):
+    sample_drs = forms.FileField(
+        label='1. Sample DRS (Input Example)',
+        help_text='Upload a previous Design Requirement Specification.'
+    )
+    sample_strategy = forms.FileField(
+        label='2. Sample Strategy (Output Example)',
+        help_text='Upload the Test Strategy that corresponds to the sample DRS above.'
+    )
+    target_drs = forms.FileField(
+        label='3. New DRS (Target)',
+        help_text='Upload the new DRS you want to generate a strategy for.'
+    )
