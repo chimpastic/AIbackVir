@@ -1,147 +1,44 @@
-<!DOCTYPE html>
-<html>
-<head>
-    <title>QA Strategy Generator</title>
-    <style>
-        body { font-family: sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
-        .container { border: 1px solid #ddd; padding: 2rem; border-radius: 8px; }
-        .response-box { background: #f0f7ff; padding: 1.5rem; border: 1px solid #cce5ff; margin-top: 2rem; border-radius: 4px;}
-        .error-box { background: #fff0f0; padding: 1rem; border: 1px solid #ffcccc; color: #d32f2f; margin-top: 1rem; }
-        
-        /* Form Styling */
-        .form-group { margin-bottom: 20px; padding: 15px; background: #fafafa; border: 1px solid #eee; border-radius: 4px; }
-        .form-group label { display: block; font-weight: bold; margin-bottom: 5px; }
-        .help-text { font-size: 0.85rem; color: #666; margin-top: 3px; display: block;}
-
-        button.primary { background: #6200ea; color: white; border: none; padding: 10px 20px; cursor: pointer; border-radius: 4px; font-size: 16px;}
-        button.secondary { background: #fff; border: 1px solid #ccc; padding: 8px 16px; cursor: pointer; border-radius: 4px; margin-right: 5px;}
-        button:hover { opacity: 0.9; }
-        
-        .actions { margin-top: 15px; padding-top: 15px; border-top: 1px solid #dae0e5; }
-
-        /* Loading Overlay */
-        #loading-overlay {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(255, 255, 255, 0.9);
-            z-index: 1000;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
-            text-align: center;
-        }
-
-        .spinner {
-            width: 50px; height: 50px;
-            border: 5px solid #f3f3f3; border-top: 5px solid #6200ea;
-            border-radius: 50%; animation: spin 1s linear infinite; margin-bottom: 20px;
-        }
-
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        .loading-text { color: #333; font-size: 1.2rem; font-weight: bold; }
-        .loading-subtext { color: #666; margin-top: 5px; font-size: 0.9rem; }
-    </style>
-</head>
-<body>
-
-    <div id="loading-overlay">
-        <div class="spinner"></div>
-        <div class="loading-text">Generating Test Strategy...</div>
-        <div class="loading-subtext">Analyzing samples and mapping requirements (Claude 3.5 Sonnet)</div>
-    </div>
-
-    <div class="container">
-        <div style="margin-bottom: 20px;">
-            <a href="{% url 'process_docx' %}">&larr; Back to Docx Converter</a>
+def stream_strategy_generator(sample_drs, sample_strat, target_drs):
+    # --- 1. Send HTML Header so the browser knows how to style the incoming stream ---
+    yield """
+    <html>
+    <head>
+        <style>
+            body { font-family: sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+            .status-update { background: #e3f2fd; padding: 10px; border-left: 4px solid #2196f3; margin: 10px 0; }
+            .status-success { background: #e8f5e9; padding: 10px; border-left: 4px solid #4caf50; margin: 10px 0; }
+            .outline-list { background: #f5f5f5; padding: 15px 30px; border-radius: 4px; }
+            .section-block { border: 1px solid #ddd; padding: 15px; margin-bottom: 20px; border-radius: 4px; }
+            .section-block h3 { margin-top: 0; color: #6200ea; }
+            .content { white-space: pre-wrap; }
+            #download-btn { display: none; background: #6200ea; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px; margin-top: 20px; cursor: pointer; }
+        </style>
+    </head>
+    <body>
+        <h2>Generating Test Strategy...</h2>
+        <button id="download-btn" onclick="downloadFile()">Download Full Strategy (.md)</button>
+        <div id="stream-container">
+    """
+    
+    # ... (Rest of the Logic: Outline, Loop, etc.) ...
+    
+    # --- End of function ---
+    yield """
         </div>
-
-        <h1>QA Strategy Generator</h1>
-        <p>Upload your example files to train the AI, then upload the new requirement document.</p>
-        
-        <form method="post" enctype="multipart/form-data" id="analysis-form">
-            {% csrf_token %}
-            
-            <div class="form-group">
-                <label>{{ form.sample_drs.label }}</label>
-                {{ form.sample_drs }}
-                <span class="help-text">{{ form.sample_drs.help_text }}</span>
-                <div style="color: red;">{{ form.sample_drs.errors }}</div>
-            </div>
-
-            <div class="form-group">
-                <label>{{ form.sample_strategy.label }}</label>
-                {{ form.sample_strategy }}
-                <span class="help-text">{{ form.sample_strategy.help_text }}</span>
-                <div style="color: red;">{{ form.sample_strategy.errors }}</div>
-            </div>
-
-            <div class="form-group" style="background: #e3f2fd; border-color: #90caf9;">
-                <label>{{ form.target_drs.label }}</label>
-                {{ form.target_drs }}
-                <span class="help-text">{{ form.target_drs.help_text }}</span>
-                <div style="color: red;">{{ form.target_drs.errors }}</div>
-            </div>
-
-            <button type="submit" class="primary">Generate Strategy</button>
-        </form>
-
-        {% if error_message %}
-        <div class="error-box">
-            <strong>Error:</strong> {{ error_message }}
-        </div>
-        {% endif %}
-
-        {% if llm_response %}
-        <div class="response-box">
-            <h3 style="margin-top: 0;">Generated Strategy:</h3>
-            <div id="ai-content" style="white-space: pre-wrap;">{{ llm_response }}</div>
-            
-            <div class="actions">
-                <strong>Download:</strong>
-                <button type="button" class="secondary" onclick="downloadResponse('markdown')">As Markdown (.md)</button>
-                <button type="button" class="secondary" onclick="downloadResponse('text')">As Text (.txt)</button>
-            </div>
-        </div>
-        {% endif %}
-    </div>
-
-    <script>
-        const form = document.getElementById('analysis-form');
-        const loader = document.getElementById('loading-overlay');
-        
-        // Get references to the file inputs
-        const input1 = document.getElementById('id_sample_drs');
-        const input2 = document.getElementById('id_sample_strategy');
-        const input3 = document.getElementById('id_target_drs');
-
-        form.addEventListener('submit', function(e) {
-            // Check if ALL three files are selected
-            if (input1.value && input2.value && input3.value) {
-                loader.style.display = 'flex';
+        <script>
+            function downloadFile() {
+                const content = document.getElementById('final-raw-content').innerText;
+                const blob = new Blob([content], { type: 'text/markdown' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'generated_strategy.md';
+                document.body.appendChild(a);
+                a.click();
             }
-        });
-
-        function downloadResponse(type) {
-            const content = document.getElementById('ai-content').innerText;
-            let filename = 'test_strategy.txt';
-            let mimeType = 'text/plain';
-
-            if (type === 'markdown') {
-                filename = 'test_strategy.md';
-                mimeType = 'text/markdown';
-            }
-
-            const blob = new Blob([content], { type: mimeType });
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            document.body.removeChild(a);
-        }
-    </script>
-</body>
-</html>
+            // Scroll to bottom as content arrives
+            window.scrollTo(0, document.body.scrollHeight);
+        </script>
+    </body>
+    </html>
+    """
