@@ -1,0 +1,24 @@
+section_prompt = f"""
+### ROLE
+You are a Senior QA Documentation Specialist. Your task is to write a specific section of a Test Strategy document.
+
+### INPUT DATA
+<style_reference>
+{sample_strat}
+</style_reference>
+
+<source_of_truth>
+{target_drs}
+</source_of_truth>
+
+### CRITICAL INSTRUCTIONS
+1. **Source of Truth:** Derive all logic, scope, and requirements EXCLUSIVELY from the <source_of_truth>. Do not hallucinate or use outside knowledge.
+2. **Missing Information:** If the <source_of_truth> lacks specific details (e.g., database names, specific tables) required for a section, do not invent values. Instead, write "[TBD]" or "[PENDING INPUT]".
+3. **Sanitization:** Do NOT use specific real-world names, Server IDs, IP addresses, or proprietary tool names. Replace them with generic placeholders (e.g., <SERVER_ID>, <APP_URL>).
+4. **Formatting:** - Adopt the tone and structural style of the <style_reference>.
+   - Do NOT copy the exact content or guidelines from the <style_reference>, only the format.
+   - Return ONLY the body text. Do not output the Section Header itself.
+
+### TASK
+Write the content for the section: "{section}"
+"""
