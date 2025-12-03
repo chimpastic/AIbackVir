@@ -1,0 +1,335 @@
+convert logic 
+import markdown
+from bs4 import BeautifulSoup
+from docx import Document
+
+class MarkdownToDocx:
+    def __init__(self):
+        self.document = Document()
+
+    def convert(self, md_text):
+        """Converts markdown text to a docx object."""
+        # 1. Convert Markdown to HTML
+        html = markdown.markdown(md_text, extensions=['tables', 'fenced_code'])
+        
+        # 2. Parse HTML
+        soup = BeautifulSoup(html, 'html.parser')
+
+        # 3. Iterate through elements
+        for element in soup.find_all(recursive=False):
+            self._process_element(element)
+
+        return self.document
+
+    def _process_element(self, element):
+        tag = element.name
+
+        if tag.startswith('h') and len(tag) == 2:
+            level = int(tag[1])
+            if 1 <= level <= 9:
+                self.document.add_heading(element.get_text(), level=level)
+        
+        elif tag == 'p':
+            self.document.add_paragraph(element.get_text())
+
+        elif tag == 'ul':
+            for li in element.find_all('li'):
+                self.document.add_paragraph(li.get_text(), style='List Bullet')
+
+        elif tag == 'ol':
+            for li in element.find_all('li'):
+                self.document.add_paragraph(li.get_text(), style='List Number')
+
+        elif tag == 'table':
+            self._process_table(element)
+
+    def _process_table(self, table_element):
+        rows = table_element.find_all('tr')
+        if not rows: return
+
+        first_row_cols = rows[0].find_all(['th', 'td'])
+        num_cols = len(first_row_cols)
+        num_rows = len(rows)
+
+        table = self.document.add_table(rows=num_rows, cols=num_cols)
+        table.style = 'Table Grid'
+
+        for i, row in enumerate(rows):
+            cols = row.find_all(['th', 'td'])
+            for j, col in enumerate(cols):
+                if j < num_cols:
+                    cell = table.cell(i, j)
+                    cell.text = col.get_text().strip()
+                    if row.find('th'):
+                        for p in cell.paragraphs:
+                            for run in p.runs:
+                                run.font.bold = True
+
+
+
+
+
+
+django view 
+
+
+import json
+import re 
+import docx
+import boto3
+from django import forms  # <--- NEW: Import forms
+from django.http import StreamingHttpResponse, HttpResponse # <--- UPDATED: Added HttpResponse
+from django.shortcuts import render
+from .forms import LLMSubmissionForm
+from .utils import MarkdownToDocx # <--- NEW: Import the helper class
+from langchain_aws import ChatBedrock
+from langchain_core.messages import HumanMessage
+
+# --- Helper: Extract Text ---
+def extract_text(uploaded_file):
+    filename = uploaded_file.name.lower()
+    if filename.endswith('.docx'):
+        doc = docx.Document(uploaded_file)
+        full_text = [para.text for para in doc.paragraphs]
+        return '\n'.join(full_text)
+    else:
+        return uploaded_file.read().decode('utf-8')
+
+# --- The Generator Function (Existing LLM Logic) ---
+def stream_strategy_generator(sample_drs, sample_strat, target_drs):
+    # 1. Setup Bedrock
+    bedrock_client = boto3.client(
+        service_name="bedrock-runtime",
+        region_name="us-east-1",
+        verify=False 
+    )
+
+    chat = ChatBedrock(
+        client=bedrock_client,
+        model_id="anthropic.claude-3-sonnet-20240229-v1:0",
+        model_kwargs={"temperature": 0.1, "max_tokens": 4096}
+    )
+
+    yield """
+    <html>
+    <head>
+        <style>
+            body { font-family: sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+            .status-update { background: #e3f2fd; padding: 10px; border-left: 4px solid #2196f3; margin: 10px 0; }
+            .status-success { background: #e8f5e9; padding: 10px; border-left: 4px solid #4caf50; margin: 10px 0; }
+            .error-box { background: #fff0f0; padding: 10px; border: 1px solid #ffcccc; color: #d32f2f; margin: 10px 0; overflow-x: auto; }
+            .outline-list { background: #f5f5f5; padding: 15px 30px; border-radius: 4px; }
+            .section-block { border: 1px solid #ddd; padding: 15px; margin-bottom: 20px; border-radius: 4px; }
+            .section-block h3 { margin-top: 0; color: #6200ea; }
+            .content { white-space: pre-wrap; }
+            #download-btn { display: none; background: #6200ea; color: white; padding: 10px 20px; text-decoration: none; border-radius: 4px; margin-top: 20px; cursor: pointer; }
+        </style>
+    </head>
+    <body>
+        <h2>Generating Test Strategy...</h2>
+        <button id="download-btn" onclick="downloadFile()">Download Full Strategy (.md)</button>
+        <div id="stream-container">
+    """
+
+    # 2. Step A: Generate the Outline
+    yield '<div class="status-update">Phase 1: Analyzing samples and creating Outline...</div>'
+
+    outline_prompt = (
+        f"Analyze this Sample Strategy:\n{sample_strat}\n\n"
+        "Extract the high-level Section Headers used in this document. "
+        "Return ONLY a JSON list of strings. "
+        "Do not write any introductory text. "
+        "Example: [\"1. Scope\", \"2. Risk Analysis\", \"3. Test Approach\"]"
+    )
+
+    try:
+        response = chat.invoke([HumanMessage(content=outline_prompt)])
+        raw_content = response.content.strip()
+        match = re.search(r'\[.*\]', raw_content, re.DOTALL)
+
+        if match:
+            json_str = match.group(0)
+            sections = json.loads(json_str)
+        else:
+            sections = json.loads(raw_content)
+
+        yield f'<div class="status-success">Outline Created: {len(sections)} sections identified.</div>'
+        yield '<ul class="outline-list">'
+        for sec in sections:
+            yield f'<li>{sec}</li>'
+        yield '</ul><hr>'
+
+    except json.JSONDecodeError:
+        yield f'<div class="error-box"><strong>Error Parsing JSON.</strong><br>The AI returned:<br><pre>{raw_content}</pre></div>'
+        return
+    except Exception as e:
+        yield f'<div class="error-box">Error communicating with AI: {str(e)}</div>'
+        return
+
+    # 3. Step B: Loop through Sections
+    full_document = []
+
+    for section in sections:
+        yield f'<div class="status-update">Generating Section: <strong>{section}</strong>...</div>'
+
+        section_prompt = (
+            f"You are writing a Test Strategy. \n"
+            f"STYLE REFERENCE: {sample_strat}\n"
+            f"INPUT REQUIREMENT: {target_drs}\n\n"
+            f"TASK: Write ONLY the content for the section: '{section}'. "
+            "Do not include the section header itself in the output, just the body text. "
+            "Maintain the exact tone and formatting of the Style Reference."
+        )
+
+        chunk_resp = chat.invoke([HumanMessage(content=section_prompt)])
+        content = chunk_resp.content
+
+        full_document.append(f"## {section}\n{content}")
+        yield f'<div class="section-block"><h3>{section}</h3><div class="content">{content}</div></div>'
+
+    # 4. Final Hidden Block
+    final_md = "\n\n".join(full_document)
+    safe_md = final_md.replace('`', '\`').replace('\\', '\\\\')
+
+    yield f'<div id="final-raw-content" style="display:none;">{final_md}</div>'
+    yield '<script>document.getElementById("download-btn").style.display = "inline-block";</script>'
+    yield '<div class="status-success">Generation Complete!</div>'
+
+    yield """
+        </div>
+        <script>
+            function downloadFile() {
+                const content = document.getElementById('final-raw-content').innerText;
+                const blob = new Blob([content], { type: 'text/markdown' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'generated_strategy.md';
+                document.body.appendChild(a);
+                a.click();
+            }
+            window.scrollTo(0, document.body.scrollHeight);
+        </script>
+    </body>
+    </html>
+    """
+
+# --- Existing View: LLM Analysis ---
+def llm_analysis(request):
+    if request.method == 'POST':
+        form = LLMSubmissionForm(request.POST, request.FILES)
+        if form.is_valid():
+            s_drs = extract_text(request.FILES['sample_drs'])
+            s_strat = extract_text(request.FILES['sample_strategy'])
+            t_drs = extract_text(request.FILES['target_drs'])
+
+            return StreamingHttpResponse(
+                stream_strategy_generator(s_drs, s_strat, t_drs)
+            )
+    else:
+        form = LLMSubmissionForm()
+
+    return render(request, 'docx_reader/llm_analysis.html', {'form': form})
+
+
+# ==========================================
+# NEW: MD to DOCX Converter Logic Starts Here
+# ==========================================
+
+# 1. The Form (Defined here so you don't need to edit forms.py)
+class MdUploadForm(forms.Form):
+    md_file = forms.FileField(
+        label="Select a Markdown (.md) file",
+        help_text="Upload the .md file you generated to convert it to Word."
+    )
+
+# 2. The View Function
+def md_to_docx_view(request):
+    if request.method == 'POST':
+        form = MdUploadForm(request.POST, request.FILES)
+        
+        if form.is_valid():
+            uploaded_file = request.FILES['md_file']
+            
+            try:
+                md_content = uploaded_file.read().decode('utf-8')
+            except UnicodeDecodeError:
+                form.add_error('md_file', "File must be UTF-8 encoded text.")
+                return render(request, "md_upload.html", {'form': form})
+
+            # Use the class from utils.py
+            converter = MarkdownToDocx()
+            docx_document = converter.convert(md_content)
+
+            # Return Docx
+            response = HttpResponse(
+                content_type='application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+            )
+            filename = uploaded_file.name.replace('.md', '.docx')
+            response['Content-Disposition'] = f'attachment; filename="{filename}"'
+            
+            docx_document.save(response)
+            return response
+    else:
+        form = MdUploadForm()
+
+    return render(request, "md_upload.html", {'form': form})
+
+
+
+
+url updates 
+from django.urls import path
+from .views import llm_analysis, md_to_docx_view
+
+urlpatterns = [
+    # ... your existing pattern ...
+    path('analyze/', llm_analysis, name='llm_analysis'),
+    
+    # ... Add this new pattern ...
+    path('convert-md/', md_to_docx_view, name='convert_md'),
+]
+
+
+
+
+
+template 
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Convert Strategy to Word</title>
+    <style>
+        body { font-family: sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
+        .container { border: 1px solid #ddd; padding: 20px; border-radius: 8px; }
+        button { background-color: #6200ea; color: white; border: none; padding: 10px 20px; cursor: pointer; border-radius: 4px;}
+        button:hover { background-color: #3700b3; }
+        label { display: block; margin-bottom: 10px; font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>MD to DOCX Converter</h2>
+        <p>Upload the Markdown file (generated by the AI) to convert it into a formatted Word Document.</p>
+        
+        <form method="post" enctype="multipart/form-data">
+            {% csrf_token %}
+            
+            <p>
+                {{ form.md_file.label_tag }}
+                {{ form.md_file }}
+            </p>
+            {% if form.md_file.errors %}
+                <p style="color: red;">{{ form.md_file.errors }}</p>
+            {% endif %}
+            
+            <button type="submit">Convert to Word</button>
+        </form>
+    </div>
+</body>
+</html>
+
+
