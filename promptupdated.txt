@@ -1,0 +1,37 @@
+outline_prompt = (
+    f"Analyze this Sample Strategy:\n{sample_strat}\n\n"
+    "Extract the Section Headers and Sub-headers used in this document to create a skeletal outline."
+    "Return ONLY a JSON list of objects. Each object must have two keys:\n"
+    "1. 'title': The text of the header (remove numbering like 1, 1.1, etc.)\n"
+    "2. 'level': An integer representing the hierarchy (1 for Main Header, 2 for Sub-header, 3 for sub-sub-header).\n\n"
+    "Example Output format:\n"
+    "[\n"
+    "  {\"title\": \"Scope\", \"level\": 1},\n"
+    "  {\"title\": \"In Scope\", \"level\": 2},\n"
+    "  {\"title\": \"Out of Scope\", \"level\": 2},\n"
+    "  {\"title\": \"Risk Analysis\", \"level\": 1}\n"
+    "]"
+)
+
+
+
+import json
+from docx import Document
+
+# ... assuming 'response_text' is the raw string from the LLM ...
+outline_data = json.loads(response_text)
+
+doc = Document()
+
+for item in outline_data:
+    header_text = item['title']
+    header_level = item['level']
+    
+    # This directly creates the correct heading size/style in Word
+    doc.add_heading(header_text, level=header_level)
+    
+    # If you are generating content for each section in this loop:
+    # content = generate_content_for(header_text)
+    # doc.add_paragraph(content)
+
+doc.save('Test_Strategy.docx')
