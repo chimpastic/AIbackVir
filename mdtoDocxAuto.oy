@@ -1,0 +1,39 @@
+    def _process_list(self, list_element, level=1):
+        """
+        Recursively processes lists but maps them to HEADING styles
+        so they appear in the Table of Contents.
+        """
+        # --- CHANGE START ---
+        # Instead of 'List Number', we use 'Heading'.
+        # Word supports 'Heading 1' through 'Heading 9'.
+        
+        # Ensure we don't exceed Heading 9
+        safe_level = min(level, 9)
+        style_name = f"Heading {safe_level}"
+        # --- CHANGE END ---
+
+        # Iterate through list items (li)
+        for li in list_element.find_all('li', recursive=False):
+            # 1. Extract the text for THIS item only
+            text_parts = []
+            nested_lists = []
+            
+            for child in li.contents:
+                if child.name in ['ul', 'ol']:
+                    nested_lists.append(child)
+                else:
+                    text_parts.append(child.get_text() if child.name else str(child))
+            
+            item_text = "".join(text_parts).strip()
+
+            # 2. Add the paragraph with the HEADING style
+            if item_text:
+                try:
+                    self.document.add_paragraph(item_text, style=style_name)
+                except KeyError:
+                    # Fallback to Heading 1 if style missing
+                    self.document.add_paragraph(item_text, style="Heading 1")
+
+            # 3. Process nested lists (Recursion)
+            for nested in nested_lists:
+                self._process_list(nested, level=level + 1)
