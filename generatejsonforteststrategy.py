@@ -1,7 +1,7 @@
 import json
 import re
 import boto3
-import html  # Import html for safe escaping
+import html
 from langchain_aws import ChatBedrock
 from langchain_core.messages import HumanMessage
 
@@ -29,10 +29,12 @@ def stream_strategy_generator(sample_drs, sample_strat, target_drs):
             .error-box { background: #fff0f0; padding: 10px; border: 1px solid #ffcccc; color: #d32f2f; margin: 10px 0; overflow-x: auto; }
             .outline-list { background: #f5f5f5; padding: 15px 30px; border-radius: 4px; }
             .section-block { border: 1px solid #ddd; padding: 15px; margin-bottom: 20px; border-radius: 4px; }
-            .section-block h3 { margin-top: 0; color: #6200ea; }
+            /* Dynamic headers in preview */
+            .section-block h1 { color: #2c3e50; font-size: 1.8em; }
+            .section-block h2 { color: #6200ea; font-size: 1.5em; }
+            .section-block h3 { color: #009688; font-size: 1.2em; }
             .content { white-space: pre-wrap; }
             
-            /* Button Styling */
             .btn-group { margin-top: 20px; display: flex; gap: 10px; }
             .btn { display: none; padding: 10px 20px; text-decoration: none; border-radius: 4px; cursor: pointer; border: none; font-size: 14px; }
             .btn-md { background: #6200ea; color: white; }
@@ -51,15 +53,23 @@ def stream_strategy_generator(sample_drs, sample_strat, target_drs):
         <div id="stream-container">
     """
 
-    # 2. Step A: Generate the Outline
-    yield '<div class="status-update">Phase 1: Analyzing samples and creating Outline...</div>'
+    # 2. Step A: Generate the Outline (UPDATED PROMPT)
+    yield '<div class="status-update">Phase 1: Analyzing samples and creating Structured Outline...</div>'
 
+    # Matches the prompt in your image
     outline_prompt = (
         f"Analyze this Sample Strategy:\n{sample_strat}\n\n"
-        "Extract the high-level Section Headers used in this document. "
-        "Return ONLY a JSON list of strings. "
-        "Do not write any introductory text. "
-        "Example: [\"1. Scope\", \"2. Risk Analysis\", \"3. Test Approach\"]"
+        "Extract the Section Headers and Sub-headers used in this document to create a skeletal outline. "
+        "Return ONLY a JSON list of objects. Each object must have two keys:\n"
+        "1. 'title': The text of the header (remove numbering like 1, 1.1, etc.)\n"
+        "2. 'level': An integer representing the hierarchy (1 for Main Header, 2 for Sub-header, 3 for sub-sub-header).\n\n"
+        "Example Output format:\n"
+        "[\n"
+        "  {\"title\": \"Scope\", \"level\": 1},\n"
+        "  {\"title\": \"In Scope\", \"level\": 2},\n"
+        "  {\"title\": \"Out of Scope\", \"level\": 2},\n"
+        "  {\"title\": \"Risk Analysis\", \"level\": 1}\n"
+        "]"
     )
 
     try:
@@ -69,35 +79,39 @@ def stream_strategy_generator(sample_drs, sample_strat, target_drs):
 
         if match:
             json_str = match.group(0)
-            sections = json.loads(json_str)
+            sections = json.loads(json_str) # List of dicts: [{'title': '...', 'level': 1}, ...]
         else:
             sections = json.loads(raw_content)
 
         yield f'<div class="status-success">Outline Created: {len(sections)} sections identified.</div>'
+        
+        # Display Outline with indentation based on level
         yield '<ul class="outline-list">'
         for sec in sections:
-            yield f'<li>{sec}</li>'
+            indent = (sec.get('level', 1) - 1) * 20
+            yield f'<li style="margin-left: {indent}px;">{sec["title"]}</li>'
         yield '</ul><hr>'
 
-    except json.JSONDecodeError:
-        yield f'<div class="error-box"><strong>Error Parsing JSON.</strong><br>The AI returned:<br><pre>{raw_content}</pre></div>'
-        return
     except Exception as e:
-        yield f'<div class="error-box">Error communicating with AI: {str(e)}</div>'
+        yield f'<div class="error-box">Error parsing outline: {str(e)}<br>Raw output: {raw_content}</div>'
         return
 
     # 3. Step B: Loop through Sections
     full_document = []
-    json_data = []  # <--- NEW: List to hold JSON structure
+    json_data = [] 
 
-    for section in sections:
-        yield f'<div class="status-update">Generating Section: <strong>{section}</strong>...</div>'
+    for section_obj in sections:
+        # Extract title and level safely
+        title = section_obj.get('title', 'Unknown Section')
+        level = int(section_obj.get('level', 1))
+        
+        yield f'<div class="status-update">Generating: <strong>{title}</strong>...</div>'
 
         section_prompt = (
             f"You are writing a Test Strategy. \n"
             f"STYLE REFERENCE: {sample_strat}\n"
             f"INPUT REQUIREMENT: {target_drs}\n\n"
-            f"TASK: Write ONLY the content for the section: '{section}'. "
+            f"TASK: Write ONLY the content for the section: '{title}'. "
             "Do not include the section header itself in the output, just the body text. "
             "Maintain the exact tone and formatting of the Style Reference."
         )
@@ -105,28 +119,27 @@ def stream_strategy_generator(sample_drs, sample_strat, target_drs):
         chunk_resp = chat.invoke([HumanMessage(content=section_prompt)])
         content = chunk_resp.content
 
-        # Append to MD list
-        full_document.append(f"## {section}\n{content}")
+        # --- MD Generation: Create hashes (#, ##, ###) based on level ---
+        header_hashes = '#' * level
+        full_document.append(f"{header_hashes} {title}\n{content}")
         
-        # Append to JSON list
+        # --- JSON Generation: Store title, level, and content ---
         json_data.append({
-            "section_title": section,
+            "title": title,
+            "level": level,
             "content": content
         })
 
-        yield f'<div class="section-block"><h3>{section}</h3><div class="content">{content}</div></div>'
+        # --- HTML Preview: Use standard h1-h6 tags ---
+        yield f'<div class="section-block"><h{level}>{title}</h{level}><div class="content">{content}</div></div>'
 
     # 4. Final Hidden Block
     final_md = "\n\n".join(full_document)
-    final_json_str = json.dumps(json_data, indent=4) # <--- NEW: Serialize JSON
+    final_json_str = json.dumps(json_data, indent=4)
 
-    # We use html.escape to safely put the JSON inside a HTML attribute or div if needed, 
-    # but strictly putting it inside a hidden div text is usually enough.
-    
     yield f'<div id="final-md-content" style="display:none;">{final_md}</div>'
     yield f'<div id="final-json-content" style="display:none;">{final_json_str}</div>'
     
-    # Reveal Buttons
     yield """
     <script>
         document.getElementById("download-md-btn").style.display = "inline-block";
@@ -136,7 +149,6 @@ def stream_strategy_generator(sample_drs, sample_strat, target_drs):
     
     yield '<div class="status-success">Generation Complete!</div>'
 
-    # Updated Script to handle both types
     yield """
         </div>
         <script>
@@ -162,7 +174,7 @@ def stream_strategy_generator(sample_drs, sample_strat, target_drs):
                 a.download = filename;
                 document.body.appendChild(a);
                 a.click();
-                document.body.removeChild(a); // Clean up
+                document.body.removeChild(a); 
                 window.URL.revokeObjectURL(url);
             }
             window.scrollTo(0, document.body.scrollHeight);
